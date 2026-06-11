@@ -1219,7 +1219,7 @@ async function connectWallet() {
     document.getElementById('conn-addr').textContent = userAddr.slice(0,6)+'...'+userAddr.slice(-4);
     document.getElementById('page-connect').classList.remove('active');
     if (!factoryAddress) {
-      const bal = await provider.getBalance(userAddr);
+      const bal = await testnetReadProvider.getBalance(userAddr);
       document.getElementById('deploy-addr-label').textContent = userAddr.slice(0,6)+'...'+userAddr.slice(-4);
       document.getElementById('deploy-balance-label').textContent = parseFloat(ethers.formatEther(bal)).toFixed(4)+' MNT';
       document.getElementById('deploy-screen').classList.add('show');
@@ -1234,17 +1234,52 @@ async function switchNetwork() {
   catch(e) { if (e.code===4902) { await window.ethereum.request({ method:'wallet_addEthereumChain', params:[MANTLE_CHAIN_PARAMS] }); } else { throw e; } }
 }
 
+// Build transaction overrides (gasLimit + nonce + gasPrice) using OUR reliable
+// FallbackProvider rather than the wallet's RPC. ethers normally populates these
+// by querying the connected wallet's RPC, and flaky/misbehaving public Mantle
+// endpoints (which differ per device/wallet) return malformed batch responses
+// that ethers can't parse ("could not coalesce error"), aborting the tx before
+// it's even signed. Pre-filling them here means the wallet only signs+broadcasts.
+async function txOverrides(gasLimit) {
+  const o = { gasLimit };
+  // Pull the gas price from our reliable provider so ethers doesn't ask the
+  // wallet's RPC for fee data (that estimation is the source of the coalesce
+  // error). Nonce is deliberately left to the wallet — MetaMask tracks it
+  // reliably, including for back-to-back txs, whereas a pending-nonce read from
+  // a lagging public RPC could collide.
+  try {
+    const fee = await testnetReadProvider.getFeeData();
+    if (fee.gasPrice) o.gasPrice = fee.gasPrice;   // legacy (type-0) tx — avoids EIP-1559 fee estimation RPC
+  } catch {}
+  return o;
+}
+
+// Wait for a tx receipt using our reliable FallbackProvider instead of the
+// wallet's RPC, so confirmation never hangs on a flaky wallet endpoint.
+async function waitForReceipt(txHash, maxWaitMs=180000) {
+  const start = Date.now();
+  while (Date.now()-start < maxWaitMs) {
+    await new Promise(r => setTimeout(r,3000));
+    let receipt = null;
+    try { receipt = await testnetReadProvider.getTransactionReceipt(txHash); } catch {}
+    if (receipt) {
+      if (receipt.status===0) throw new Error('Transaction reverted on-chain');
+      return receipt;
+    }
+  }
+  throw new Error('Transaction not confirmed after 3 min. Check: '+EXPLORER+'/tx/'+txHash);
+}
+
 async function deployFactory() {
   const btn = document.getElementById('deploy-factory-btn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Waiting for wallet confirmation...';
   try {
     const factory = new ethers.ContractFactory(FACTORY_ABI, FACTORY_BYTECODE, signer);
-    // Skip eth_estimateGas — some Mantle RPC nodes return a malformed/multi-error
-    // response for it that ethers can't parse ("could not coalesce error"),
-    // which aborts the deploy before the wallet even prompts. A fixed gas limit
-    // sidesteps the estimate call entirely.
-    const contract = await factory.deploy({ gasLimit: 5_000_000n });
+    // Pre-fill gasLimit/nonce/gasPrice from our reliable provider so ethers never
+    // asks the wallet's (possibly flaky) RPC to estimate them — that estimation
+    // is what triggers the "could not coalesce error" on some devices/wallets.
+    const contract = await factory.deploy(await txOverrides(5_000_000n));
     const txHash = contract.deploymentTransaction().hash;
     btn.innerHTML = '<span class="spinner"></span> Confirming... ('+txHash.slice(0,10)+'...)';
     factoryAddress = await pollForContractAddress(txHash);
@@ -1264,28 +1299,14 @@ async function deployFactory() {
   }
 }
 
-async function pollTx(txHash, maxWaitMs=120000) {
-  const start = Date.now();
-  while (Date.now()-start < maxWaitMs) {
-    await new Promise(r => setTimeout(r,3000));
-    const receipt = await provider.getTransactionReceipt(txHash);
-    if (receipt) { if (receipt.status===0) throw new Error('Transaction reverted on-chain'); return receipt; }
-  }
-  throw new Error('Transaction not confirmed after 2 min. Check: '+EXPLORER+'/tx/'+txHash);
+async function pollTx(txHash, maxWaitMs=180000) {
+  return await waitForReceipt(txHash, maxWaitMs);
 }
 
-async function pollForContractAddress(txHash, maxWaitMs=120000) {
-  const start = Date.now();
-  while (Date.now()-start < maxWaitMs) {
-    await new Promise(r => setTimeout(r,3000));
-    const receipt = await provider.getTransactionReceipt(txHash);
-    if (receipt) {
-      if (receipt.status===0) throw new Error('Transaction failed (reverted)');
-      if (receipt.contractAddress) return receipt.contractAddress;
-      throw new Error('No contract address in receipt');
-    }
-  }
-  throw new Error('Transaction not confirmed after 2 minutes. Check explorer: '+EXPLORER+'/tx/'+txHash);
+async function pollForContractAddress(txHash, maxWaitMs=180000) {
+  const receipt = await waitForReceipt(txHash, maxWaitMs);
+  if (receipt.contractAddress) return receipt.contractAddress;
+  throw new Error('No contract address in receipt');
 }
 
 function resetFactory() { localStorage.removeItem(FACTORY_KEY); factoryAddress=null; location.reload(); }
@@ -1313,7 +1334,7 @@ async function resetSwitchAndRedeploy() {
       document.getElementById('page-connect').classList.remove('active');
       const bl=document.getElementById('deploy-addr-label'), bn=document.getElementById('deploy-balance-label');
       if(bl) bl.textContent=userAddr.slice(0,6)+'...'+userAddr.slice(-4);
-      provider.getBalance(userAddr).then(bal=>{ if(bn) bn.textContent=parseFloat(ethers.formatEther(bal)).toFixed(4)+' MNT'; });
+      testnetReadProvider.getBalance(userAddr).then(bal=>{ if(bn) bn.textContent=parseFloat(ethers.formatEther(bal)).toFixed(4)+' MNT'; });
       document.getElementById('deploy-screen').classList.add('show');
     }, 1200);
   } catch(err) {
@@ -1635,21 +1656,15 @@ async function createSwitch() {
   toast('Check your wallet for confirmation...','info');
   try {
     const factory=new ethers.Contract(factoryAddress,FACTORY_ABI,signer);
-    const tx=await factory.createSwitch(intervalSecs,graceSecs,{gasLimit:5_000_000n});
+    const tx=await factory.createSwitch(intervalSecs,graceSecs,await txOverrides(5_000_000n));
     toast('Transaction sent, confirming... ('+tx.hash.slice(0,10)+'...)','success');
-    let receipt=null; const start=Date.now();
-    while(!receipt&&Date.now()-start<120000){
-      await new Promise(r=>setTimeout(r,3000));
-      receipt=await provider.getTransactionReceipt(tx.hash);
-    }
-    if(!receipt) throw new Error('Transaction not confirmed after 2 minutes');
-    if(receipt.status===0) throw new Error('Transaction reverted on-chain');
+    const receipt=await waitForReceipt(tx.hash);
     const iface=new ethers.Interface(FACTORY_ABI);
     let contractAddress='';
     for(const log of receipt.logs){
       try{const p=iface.parseLog({topics:[...log.topics],data:log.data});if(p?.name==='SwitchCreated'){contractAddress=p.args.switchAddress;break;}}catch{}
     }
-    if(!contractAddress){const fc=new ethers.Contract(factoryAddress,FACTORY_ABI,provider);contractAddress=await fc.getUserSwitch(userAddr);}
+    if(!contractAddress){const fc=new ethers.Contract(factoryAddress,FACTORY_ABI,testnetReadProvider);contractAddress=await fc.getUserSwitch(userAddr);}
     if(!contractAddress||contractAddress==='0x0000000000000000000000000000000000000000') throw new Error('No contract address found');
     const res=await apiFetch('/switch/create','POST',{contractAddress,checkInIntervalSecs:intervalSecs,gracePeriodSecs:graceSecs});
     if(res.success){toast('Switch deployed! 🎉','success');await loadDashboard();}
@@ -1669,7 +1684,7 @@ async function createSwitch() {
       // On-chain factory already has a switch for this wallet — recover its
       // address and register/sync it with the backend instead of dead-ending.
       try {
-        const fc=new ethers.Contract(factoryAddress,FACTORY_ABI,provider);
+        const fc=new ethers.Contract(factoryAddress,FACTORY_ABI,testnetReadProvider);
         const existingAddr=await fc.getUserSwitch(userAddr);
         console.log('[DeathSwitch] recovery: existingAddr from factory =',existingAddr);
         if(existingAddr && existingAddr!=='0x0000000000000000000000000000000000000000'){
@@ -1701,7 +1716,7 @@ async function doCheckin() {
   btn.disabled=true; label.textContent='...';
   try {
     const sw=new ethers.Contract(switchData.contractAddress,SWITCH_ABI,signer);
-    const tx=await sw.checkIn();
+    const tx=await sw.checkIn(await txOverrides(200_000n));
     label.textContent='Confirming';
     const receipt=await pollTx(tx.hash);
     await apiFetch('/checkin','POST',{txHash:receipt.hash});
@@ -1806,10 +1821,10 @@ async function saveEditBene(id, walletAddr) {
   const sw=new ethers.Contract(switchData.contractAddress,SWITCH_ABI,signer);
   try {
     toast('Waiting for wallet — removing old allocation...','info');
-    const tx1=await sw.removeBeneficiary(walletAddr);
+    const tx1=await sw.removeBeneficiary(walletAddr,await txOverrides(500_000n));
     await pollTx(tx1.hash);
     toast('Re-adding with new allocation...','info');
-    const tx2=await sw.addBeneficiary(walletAddr,newBasisPoints,newLabel);
+    const tx2=await sw.addBeneficiary(walletAddr,newBasisPoints,newLabel,await txOverrides(500_000n));
     const receipt=await pollTx(tx2.hash);
     await apiFetch(`/beneficiaries/${id}`,'DELETE');
     const res=await apiFetch('/beneficiaries','POST',{walletAddress:walletAddr,label:newLabel,basisPoints:newBasisPoints,tokens:newTokens,txHash:receipt.hash});
@@ -1847,7 +1862,7 @@ async function addBeneficiary() {
   toast('Check your wallet for confirmation...','info');
   try {
     const sw=new ethers.Contract(switchData.contractAddress,SWITCH_ABI,signer);
-    const tx=await sw.addBeneficiary(walletAddr,basisPoints,label);
+    const tx=await sw.addBeneficiary(walletAddr,basisPoints,label,await txOverrides(500_000n));
     toast('Transaction sent...','success');
     const receipt=await pollTx(tx.hash);
     const res=await apiFetch('/beneficiaries','POST',{walletAddress:walletAddr,label,basisPoints,tokens,txHash:receipt.hash});
@@ -1873,7 +1888,7 @@ async function forceRemoveBeneficiary() {
   toast('Check your wallet for confirmation...','info');
   try {
     const sw=new ethers.Contract(switchData.contractAddress,SWITCH_ABI,signer);
-    const tx=await sw.removeBeneficiary(walletAddr);
+    const tx=await sw.removeBeneficiary(walletAddr,await txOverrides(500_000n));
     toast('Transaction sent, confirming...','info');
     await pollTx(tx.hash);
     const benes=switchData.beneficiaries||[];
@@ -1895,7 +1910,7 @@ async function removeBeneficiary(id,walletAddr) {
   toast('Check your wallet for confirmation...','info');
   try {
     const sw=new ethers.Contract(switchData.contractAddress,SWITCH_ABI,signer);
-    const tx=await sw.removeBeneficiary(walletAddr);
+    const tx=await sw.removeBeneficiary(walletAddr,await txOverrides(500_000n));
     await pollTx(tx.hash);
     await apiFetch(`/beneficiaries/${id}`,'DELETE');
     toast('Removed ✓','success'); await loadDashboard();
@@ -2076,7 +2091,7 @@ async function submitDeposit() {
     if(!asset.contractAddress) {
       const value=ethers.parseEther(amountStr);
       status.textContent='Confirm in wallet — sending '+amountStr+' MNT...';
-      const tx=await sw.depositNative({value});
+      const tx=await sw.depositNative({value, ...await txOverrides(300_000n)});
       status.textContent='Transaction sent, confirming...';
       await pollTx(tx.hash);
       status.style.color='var(--c)';
@@ -2089,12 +2104,12 @@ async function submitDeposit() {
       const allowance=await token.allowance(userAddr,switchData.contractAddress);
       if(allowance<amount) {
         status.textContent='Confirm in wallet — approving '+asset.symbol+'...';
-        const approveTx=await token.approve(switchData.contractAddress,amount);
+        const approveTx=await token.approve(switchData.contractAddress,amount,await txOverrides(150_000n));
         await pollTx(approveTx.hash);
       }
 
       status.textContent='Confirm in wallet — depositing '+asset.symbol+'...';
-      const tx=await sw.depositERC20(asset.contractAddress,amount);
+      const tx=await sw.depositERC20(asset.contractAddress,amount,await txOverrides(400_000n));
       status.textContent='Transaction sent, confirming...';
       await pollTx(tx.hash);
       status.style.color='var(--c)';
@@ -2248,7 +2263,7 @@ async function withdrawAll() {
   toast('Check your wallet for confirmation...','info');
   try {
     const sw=new ethers.Contract(switchData.contractAddress,SWITCH_ABI,signer);
-    const tx=await sw.withdrawAll(); await pollTx(tx.hash);
+    const tx=await sw.withdrawAll(await txOverrides(3_000_000n)); await pollTx(tx.hash);
     toast('Assets withdrawn ✓','success');
     await loadAssets();
   } catch(e) { toast('Error: '+(e.shortMessage||e.message),'error'); }
