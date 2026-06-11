@@ -1440,10 +1440,17 @@ function showSwitchInfo() {
     _pollTimer = setInterval(async ()=>{
       const res=await apiFetch('/switch','GET');
       if(res.success&&res.data){
+        const statusChanged = res.data.status!==switchData?.status;
         switchData=res.data;
         if(res.data.status==='TRIGGERED'||res.data.onChainTriggered){
           clearInterval(_pollTimer); _pollTimer=null;
           showSwitchInfo();
+        } else if(statusChanged){
+          showSwitchInfo();
+        } else {
+          // Lightweight live update of the status badge/EKG without
+          // resetting the countdown timer.
+          updateStatusBadge(res.data);
         }
       }
     }, 5000);
@@ -1526,6 +1533,14 @@ async function forceTrigger() {
 }
 
 let _lastEkgState = '';
+
+function updateStatusBadge(d) {
+  const statusLabel=(d.status||'').replace('_',' ');
+  const statEl=document.getElementById('stat-status');
+  const textEl=document.getElementById('stat-status-text');
+  if(statEl) statEl.innerHTML=`<div class="stat-dot"></div>${statusLabel}`;
+  if(textEl) textEl.textContent=statusLabel;
+}
 
 function setEkgState(state) {
   if(_lastEkgState === state) return;
