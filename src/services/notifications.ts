@@ -16,6 +16,10 @@ const transporter = emailEnabled
     })
   : null;
 
+export function isEmailEnabled(): boolean {
+  return emailEnabled;
+}
+
 async function sendEmail(to: string, subject: string, html: string): Promise<void> {
   if (!emailEnabled || !transporter) {
     logger.warn({ to, subject }, "Email not configured (EMAIL_USER/EMAIL_APP_PASSWORD) — skipping email");

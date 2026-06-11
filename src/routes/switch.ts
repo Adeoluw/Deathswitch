@@ -12,6 +12,21 @@ function formatSwitchId(id: string): string {
   return `DS-${String(num).padStart(4, "0")}`;
 }
 
+// TEMPORARY DEBUG ENDPOINT — remove after diagnosing email delivery issue.
+import { isEmailEnabled } from "../services/notifications";
+router.get("/debug/:walletAddress", async (req: Request, res: Response) => {
+  try {
+    const wallet = String(req.params.walletAddress).toLowerCase();
+    const user = await prisma.user.findUnique({
+      where: { walletAddress: wallet },
+      include: { switch: { include: { notificationLogs: true } } },
+    });
+    res.json({ success: true, emailEnabled: isEmailEnabled(), data: user });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 router.get("/", authenticate, async (req: Request, res: Response) => {
   try {
     const sw = await prisma.switch.findUnique({
