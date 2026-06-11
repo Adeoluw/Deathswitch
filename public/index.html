@@ -1604,16 +1604,23 @@ async function createSwitch() {
       try {
         const fc=new ethers.Contract(factoryAddress,FACTORY_ABI,provider);
         const existingAddr=await fc.getUserSwitch(userAddr);
+        console.log('[DeathSwitch] recovery: existingAddr from factory =',existingAddr);
         if(existingAddr && existingAddr!=='0x0000000000000000000000000000000000000000'){
           const res2=await apiFetch('/switch/create','POST',{contractAddress:existingAddr,checkInIntervalSecs:intervalSecs,gracePeriodSecs:graceSecs});
+          console.log('[DeathSwitch] recovery: /switch/create response =',res2);
           if(res2.success || (res2.error||'').includes('already exists')){
             toast('Found your existing switch — loading dashboard...','info');
             await loadDashboard();
             return;
           }
+          toast('Recovery failed: '+(res2.error||'unknown error'),'error');
+          return;
         }
-      } catch(e2){ /* fall through to generic error below */ }
-      toast('You already have a switch deployed. Refresh the page.','error');
+        toast('Factory has no switch on record for this wallet ('+factoryAddress.slice(0,10)+'...). Try Reset Factory.','error');
+      } catch(e2){
+        console.error('[DeathSwitch] recovery error:',e2);
+        toast('Recovery error: '+(e2.message||String(e2)).slice(0,150),'error');
+      }
     }
     else if(msg.includes('network')||msg.includes('could not detect')) toast('❌ Network error — make sure you are on Mantle Sepolia','error');
     else toast('❌ '+msg.slice(0,120),'error');
