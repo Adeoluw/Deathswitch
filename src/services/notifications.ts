@@ -26,12 +26,40 @@ export function isEmailEnabled(): boolean {
   return emailEnabled;
 }
 
+const resendEnabled = !!(config.RESEND_API_KEY && config.RESEND_FROM_EMAIL);
+
+async function sendViaResend(to: string, subject: string, html: string): Promise<void> {
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${config.RESEND_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: `${config.EMAIL_FROM_NAME} <${config.RESEND_FROM_EMAIL}>`,
+      to: [to],
+      subject,
+      html,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Resend API error ${res.status}: ${body}`);
+  }
+}
+
 async function sendEmail(to: string, subject: string, html: string): Promise<void> {
+  // Prefer Resend (HTTPS API) — works on hosts like Render's free tier that
+  // block outbound SMTP ports, which silently hangs/fails Gmail SMTP.
+  if (resendEnabled) {
+    await sendViaResend(to, subject, html);
+    return;
+  }
   if (!emailEnabled || !transporter) {
-    logger.warn({ to, subject }, "Email not configured (EMAIL_USER/EMAIL_APP_PASSWORD) — skipping email");
+    logger.warn({ to, subject }, "Email not configured (set RESEND_API_KEY+RESEND_FROM_EMAIL, or EMAIL_USER/EMAIL_APP_PASSWORD) — skipping email");
     // Throw so callers (watchdog) record this as a FAILED notification instead of
     // silently logging "success: true" when nothing was actually sent.
-    throw new Error("Email not configured: set EMAIL_USER and EMAIL_APP_PASSWORD in .env");
+    throw new Error("Email not configured: set RESEND_API_KEY/RESEND_FROM_EMAIL (recommended) or EMAIL_USER/EMAIL_APP_PASSWORD in .env");
   }
   await transporter.sendMail({
     from: `"${config.EMAIL_FROM_NAME}" <${config.EMAIL_USER}>`,

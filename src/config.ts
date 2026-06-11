@@ -21,6 +21,11 @@ const configSchema = z.object({
   EMAIL_USER: z.string().email().optional(),
   EMAIL_APP_PASSWORD: z.string().optional(),
   EMAIL_FROM_NAME: z.string().default("DeathSwitch"),
+  // Resend (https://resend.com) — sends email over HTTPS, works on hosts (like
+  // Render's free tier) that block outbound SMTP ports. Preferred over Gmail SMTP
+  // when set.
+  RESEND_API_KEY: z.string().optional(),
+  RESEND_FROM_EMAIL: z.string().email().optional(),
   ADMIN_EMAIL: z.string().email().default("admin@deathswitch.xyz"),
 });
 
