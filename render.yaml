@@ -1,0 +1,41 @@
+services:
+  - type: web
+    name: deathswitch-backend
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    dockerCommand: sh -c "npx prisma migrate deploy && node dist/index.js"
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: DATABASE_URL
+        fromDatabase:
+          name: deathswitch-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: MANTLE_RPC_URL
+        value: https://rpc.mantle.xyz
+      - key: MANTLE_TESTNET_RPC_URL
+        value: https://rpc.sepolia.mantle.xyz
+      - key: BACKEND_WALLET_PRIVATE_KEY
+        sync: false
+      - key: FACTORY_CONTRACT_ADDRESS
+        sync: false
+      - key: EMAIL_USER
+        sync: false
+      - key: EMAIL_APP_PASSWORD
+        sync: false
+      - key: EMAIL_FROM_NAME
+        value: DeathSwitch
+      - key: ADMIN_EMAIL
+        sync: false
+
+databases:
+  - name: deathswitch-db
+    plan: free
+    databaseName: deathswitch
+    user: deathswitch
