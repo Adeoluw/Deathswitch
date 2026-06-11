@@ -857,8 +857,15 @@ input.plain:focus{border-color:rgba(0,255,234,.4);box-shadow:0 0 0 3px rgba(0,25
                 <button onclick="setMaxDeposit()" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:11px;font-weight:700;color:var(--c);letter-spacing:.06em">MAX</button>
               </div>
             </div>
-            <div style="font-family:var(--mono);font-size:11px;color:var(--td);margin-bottom:6px">Wallet balance (Testnet): <span id="deposit-wallet-balance">—</span></div>
-            <div id="deposit-mainnet-row" style="font-family:var(--mono);font-size:11px;color:var(--td);margin-bottom:18px;display:none">Wallet balance (Mainnet): <span id="deposit-wallet-balance-mainnet">—</span> <span style="color:var(--g)">— deposits use Testnet only</span></div>
+            <div class="form-group">
+              <label class="form-label">Network</label>
+              <div style="display:flex;gap:8px">
+                <button type="button" id="deposit-net-testnet" onclick="setDepositNetwork('testnet')" class="btn btn-c" style="flex:1;padding:8px;font-size:11px">Testnet</button>
+                <button type="button" id="deposit-net-mainnet" onclick="setDepositNetwork('mainnet')" class="btn" style="flex:1;padding:8px;font-size:11px">Mainnet</button>
+              </div>
+            </div>
+            <div id="deposit-testnet-row" style="font-family:var(--mono);font-size:11px;color:var(--td);margin-bottom:18px">Wallet balance (Testnet): <span id="deposit-wallet-balance">—</span></div>
+            <div id="deposit-mainnet-row" style="font-family:var(--mono);font-size:11px;color:var(--td);margin-bottom:18px;display:none">Wallet balance (Mainnet): <span id="deposit-wallet-balance-mainnet">—</span> <span style="color:var(--y)">— deposits are only supported on Testnet</span></div>
             <button class="btn btn-c btn-full" style="padding:13px" onclick="submitDeposit()" id="deposit-submit-btn">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
               Deposit
@@ -1947,15 +1954,46 @@ async function loadAssets() {
 
 function closeDepositModal() {} // legacy no-op (deposit is now inline on Assets page)
 
+let _depositNetwork = 'testnet';
+
+function setDepositNetwork(net) {
+  _depositNetwork = net;
+  const testnetBtn=document.getElementById('deposit-net-testnet');
+  const mainnetBtn=document.getElementById('deposit-net-mainnet');
+  const testnetRow=document.getElementById('deposit-testnet-row');
+  const mainnetRow=document.getElementById('deposit-mainnet-row');
+  const submitBtn=document.getElementById('deposit-submit-btn');
+  const status=document.getElementById('deposit-status');
+  if(net==='mainnet'){
+    testnetBtn.classList.remove('btn-c');
+    mainnetBtn.classList.add('btn-c');
+    testnetRow.style.display='none';
+    mainnetRow.style.display='block';
+    submitBtn.disabled=true;
+    submitBtn.style.opacity='0.5';
+    status.style.display='block';
+    status.style.color='var(--y)';
+    status.textContent='Deposits are only supported on Mantle Sepolia Testnet. Switch back to Testnet to deposit.';
+  } else {
+    mainnetBtn.classList.remove('btn-c');
+    testnetBtn.classList.add('btn-c');
+    mainnetRow.style.display='none';
+    testnetRow.style.display='block';
+    submitBtn.disabled=false;
+    submitBtn.style.opacity='1';
+    status.style.display='none';
+    status.textContent='';
+  }
+  onDepositAssetChange();
+}
+
 async function onDepositAssetChange() {
   const idx=document.getElementById('deposit-asset-select').value;
   const asset=_depositAssets[idx];
   if(!asset||!provider||!userAddr) return;
   const balEl=document.getElementById('deposit-wallet-balance');
-  const mainnetRow=document.getElementById('deposit-mainnet-row');
   const mainnetBalEl=document.getElementById('deposit-wallet-balance-mainnet');
   balEl.textContent='Loading...';
-  mainnetRow.style.display='none';
   try {
     if(!asset.contractAddress) {
       // Always read native MNT balance from a dedicated Mantle Sepolia RPC,
@@ -1964,16 +2002,18 @@ async function onDepositAssetChange() {
       // never went through.
       const bal=await testnetReadProvider.getBalance(userAddr);
       balEl.textContent=parseFloat(ethers.formatEther(bal)).toFixed(5)+' '+asset.symbol;
-      try {
-        const mainnetBal=await mainnetReadProvider.getBalance(userAddr);
-        mainnetBalEl.textContent=parseFloat(ethers.formatEther(mainnetBal)).toFixed(5)+' MNT';
-        mainnetRow.style.display='block';
-      } catch { /* mainnet RPC optional */ }
+      if(_depositNetwork==='mainnet'){
+        try {
+          const mainnetBal=await mainnetReadProvider.getBalance(userAddr);
+          mainnetBalEl.textContent=parseFloat(ethers.formatEther(mainnetBal)).toFixed(5)+' MNT';
+        } catch { mainnetBalEl.textContent='—'; }
+      }
     } else {
       const token=new ethers.Contract(asset.contractAddress,ERC20_ABI_FE,testnetReadProvider);
       const bal=await token.balanceOf(userAddr);
       const dec=asset.decimals ?? await token.decimals();
       balEl.textContent=parseFloat(ethers.formatUnits(bal,dec)).toFixed(5)+' '+asset.symbol;
+      if(_depositNetwork==='mainnet') mainnetBalEl.textContent='— (token balances shown for Testnet only)';
     }
   } catch(e) {
     balEl.textContent='—';
