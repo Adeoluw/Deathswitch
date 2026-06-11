@@ -32,6 +32,12 @@ services:
         value: DeathSwitch
       - key: ADMIN_EMAIL
         sync: false
+      # Resend (HTTPS email API) — preferred over Gmail SMTP on Render's free
+      # tier, which blocks outbound SMTP ports. Set these in the dashboard.
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
 
 databases:
   - name: deathswitch-db

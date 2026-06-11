@@ -92,18 +92,30 @@ All responses follow `{ success: boolean, data?: any, error?: string }`.
 
 ## Watchdog Service
 
-The watchdog cron job runs inside the API server process every **15 minutes**.
+The watchdog cron job runs inside the API server process every **1 minute**.
 
-It scans all switches with `status = ACTIVE | GRACE_PERIOD` and `nextCheckInDue < now`, then applies escalation stages:
+It scans all switches with `status = ACTIVE | GRACE_PERIOD` and `nextCheckInDue < now`, then applies escalation stages (thresholds scale with each switch's own grace period):
 
 | Stage | Trigger | Action |
 |---|---|---|
-| 1 | Overdue (day 0+) | Email via SendGrid |
-| 2 | 7 days overdue | SMS via Twilio |
-| 3 | 14 days overdue | Phone call log (simulated) |
-| 4 | Grace period elapsed | Calls `trigger()` on-chain |
+| 0 | Overdue | Daily reminder email (repeats every 24h) |
+| 1 | Overdue (first) | Overdue email; status → `GRACE_PERIOD` |
+| 2 | 50% of grace elapsed | Urgent reminder email |
+| 3 | 90% of grace elapsed | Final notice email |
+| 4 | On-chain trigger deadline passed | Calls `trigger()` on-chain |
 
-The watchdog is **idempotent**: it checks `escalationStage` and `NotificationLog` before sending to avoid duplicates. Failed on-chain calls are retried 3 times with exponential backoff; if all retries fail, an admin alert email is sent.
+Emails are sent via **Resend** (HTTPS API) when configured, falling back to Gmail SMTP. The watchdog is **idempotent**: it checks `escalationStage` and `NotificationLog` before sending to avoid duplicates. Failed on-chain calls are retried 3 times with exponential backoff; if all retries fail, an admin alert email is sent.
+
+### Keeping the watchdog alive on Render free tier
+
+Render's free tier **spins the service down after ~15 min of inactivity**, and the watchdog cron does **not** run while spun down — so triggers/emails would be delayed until the next request wakes it.
+
+Two layers guard against this:
+
+1. **Built-in self-ping** (`src/services/keepAlive.ts`): once running, the process pings its own `/health` every 10 minutes (using `RENDER_EXTERNAL_URL`, which Render injects automatically). Self-requests count as inbound traffic, so the service stays awake and the watchdog keeps ticking.
+2. **External uptime pinger (recommended backup):** configure a free service such as [cron-job.org](https://cron-job.org) or [UptimeRobot](https://uptimerobot.com) to GET `https://<your-app>.onrender.com/health` every 5 minutes. This wakes the service even if the process itself ever goes fully down (which the internal self-ping cannot recover from).
+
+For guaranteed always-on triggering, upgrade to a paid Render instance or run the watchdog as a separate always-on background worker.
 
 ---
 

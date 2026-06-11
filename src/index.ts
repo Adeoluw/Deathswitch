@@ -9,6 +9,7 @@ import beneficiaryRoutes from "./routes/beneficiaries";
 import assetRoutes from "./routes/assets";
 import checkinRoutes from "./routes/checkin";
 import { startWatchdog } from "./services/watchdog";
+import { startKeepAlive } from "./services/keepAlive";
 
 const app = express();
 
@@ -43,6 +44,7 @@ app.listen(config.PORT, () => {
   logger.info({ port: config.PORT, env: config.NODE_ENV }, "DeathSwitch API started");
   if (config.NODE_ENV !== "test") {
     startWatchdog();
+    startKeepAlive();
   }
 });
 
