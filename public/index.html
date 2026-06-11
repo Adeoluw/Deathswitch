@@ -1586,12 +1586,35 @@ async function createSwitch() {
     if(!contractAddress||contractAddress==='0x0000000000000000000000000000000000000000') throw new Error('No contract address found');
     const res=await apiFetch('/switch/create','POST',{contractAddress,checkInIntervalSecs:intervalSecs,gracePeriodSecs:graceSecs});
     if(res.success){toast('Switch deployed! 🎉','success');await loadDashboard();}
+    else if((res.error||'').includes('already exists')){
+      // Backend already has a record for this user (e.g. an earlier request
+      // succeeded server-side even though the browser saw a network error) —
+      // just reload the dashboard instead of erroring out.
+      toast('Switch already registered — loading your dashboard...','info');
+      await loadDashboard();
+    }
     else throw new Error(res.error);
   } catch(e) {
     const msg=e.reason||e.shortMessage||e.message||String(e);
     if(msg.includes('insufficient funds')||msg.includes('not enough')) toast('❌ Not enough testnet MNT for gas. Get some at faucet.sepolia.mantle.xyz','error');
     else if(msg.includes('user rejected')||msg.includes('User rejected')||msg.includes('4001')) toast('Transaction cancelled in wallet','error');
-    else if(msg.includes('already exists')) toast('You already have a switch deployed. Refresh the page.','error');
+    else if(msg.includes('already exists')){
+      // On-chain factory already has a switch for this wallet — recover its
+      // address and register/sync it with the backend instead of dead-ending.
+      try {
+        const fc=new ethers.Contract(factoryAddress,FACTORY_ABI,provider);
+        const existingAddr=await fc.getUserSwitch(userAddr);
+        if(existingAddr && existingAddr!=='0x0000000000000000000000000000000000000000'){
+          const res2=await apiFetch('/switch/create','POST',{contractAddress:existingAddr,checkInIntervalSecs:intervalSecs,gracePeriodSecs:graceSecs});
+          if(res2.success || (res2.error||'').includes('already exists')){
+            toast('Found your existing switch — loading dashboard...','info');
+            await loadDashboard();
+            return;
+          }
+        }
+      } catch(e2){ /* fall through to generic error below */ }
+      toast('You already have a switch deployed. Refresh the page.','error');
+    }
     else if(msg.includes('network')||msg.includes('could not detect')) toast('❌ Network error — make sure you are on Mantle Sepolia','error');
     else toast('❌ '+msg.slice(0,120),'error');
   }
@@ -2109,11 +2132,19 @@ function showFactoryInfo() {
   else toast('No factory address set','error');
 }
 
-async function apiFetch(path,method='GET',body=null) {
+async function apiFetch(path,method='GET',body=null,_retried=false) {
   const opts={method,headers:{'Content-Type':'application/json'}};
   if(jwt) opts.headers['Authorization']='Bearer '+jwt;
   if(body) opts.body=JSON.stringify(body);
-  try { const r=await fetch(API_BASE+path,opts); return await r.json(); }
+  let r;
+  try { r=await fetch(API_BASE+path,opts); }
+  catch(e) { return{success:false,error:e.message}; }
+  if(r.status===401 && !_retried && signer){
+    // Session expired/missing — re-sign in once and retry the request.
+    try { await siweLogin(); return await apiFetch(path,method,body,true); }
+    catch(e){ return{success:false,error:'Session expired — please reconnect your wallet.'}; }
+  }
+  try { return await r.json(); }
   catch(e) { return{success:false,error:e.message}; }
 }
 
