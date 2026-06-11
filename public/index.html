@@ -43,7 +43,7 @@ body::before{
   11%{box-shadow:0 0 95px rgba(0,255,234,.44),0 0 220px rgba(0,255,234,.16),inset 0 1px 0 rgba(255,255,255,.08)}
   22%{box-shadow:0 0 60px rgba(0,255,234,.18),0 0 140px rgba(0,255,234,.06),inset 0 1px 0 rgba(255,255,255,.08)}
 }
-@keyframes ecg-move{from{transform:translateX(0)}to{transform:translateX(-200px)}}
+@keyframes ecg-move{from{transform:translateX(0)}to{transform:translateX(var(--ecg-shift,-200px))}}
 @keyframes wave-scroll{from{transform:translateX(0)}to{transform:translateX(-52px)}}
 @keyframes flatline{0%,100%{opacity:.7}50%{opacity:.3}}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -1065,8 +1065,10 @@ function buildEkgSvg(state){
 function renderEkg(state){
   const track=document.getElementById('ecgTrack');
   if(!track) return;
+  const conf=EKG_CYCLES[state==='flatline'?'ok':state]||EKG_CYCLES.ok;
   const svg=buildEkgSvg(state==='flatline'?'ok':state);
   track.innerHTML=svg+svg;
+  track.style.setProperty('--ecg-shift', (-conf.W)+'px');
 }
 renderEkg('ok');
 
