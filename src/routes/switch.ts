@@ -6,6 +6,17 @@ import { logger } from "../utils/logger";
 
 const router = Router();
 
+// TEMPORARY DEBUG ENDPOINT — remove after diagnosing email delivery issue.
+router.get("/debug-send-email/:to", async (req: Request, res: Response) => {
+  try {
+    const { sendOverdueEmail } = await import("../services/notifications");
+    await sendOverdueEmail(String(req.params.to), "0xDEBUG");
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 function formatSwitchId(id: string): string {
   const digits = id.replace(/\D/g, "").slice(0, 4);
   const num = parseInt(digits || "1", 10);
