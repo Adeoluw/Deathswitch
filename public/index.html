@@ -1115,6 +1115,7 @@ function showPage(name,el){
   if(target)target.classList.add('active');
   if(!el) el=document.querySelector('.sb-item[data-page="page-'+name+'"]');
   if(el) el.classList.add('active');
+  if(VALID_PAGES.includes(name)) localStorage.setItem(PAGE_KEY,name);
   if(name==='assets') loadAssets();
   if(name==='beneficiaries'&&switchData) loadBeneficiaries(switchData.beneficiaries||[]);
   if(name==='settings') populateSettingsPage();
@@ -1131,6 +1132,16 @@ const CHAIN_ID    = 5003;
 const CHAIN_HEX   = '0x138B';
 const EXPLORER    = 'https://explorer.sepolia.mantle.xyz';
 const FACTORY_KEY = 'ds_factory_v1';
+const JWT_KEY     = 'ds_jwt_v1';      // persisted session token (7-day JWT) so refresh stays logged in
+const ADDR_KEY    = 'ds_addr_v1';     // wallet address the session belongs to
+const PAGE_KEY    = 'ds_page_v1';     // last app page, so refresh stays on the same page
+const VALID_PAGES = ['dashboard','beneficiaries','assets','settings'];
+
+function clearSession() {
+  localStorage.removeItem(JWT_KEY);
+  localStorage.removeItem(ADDR_KEY);
+  localStorage.removeItem(PAGE_KEY);
+}
 
 // DeathSwitch contracts live on Mantle Sepolia (testnet) — that's the only
 // network deposits actually go to. We also show the wallet's Mantle Mainnet
@@ -1403,7 +1414,7 @@ async function pollForContractAddress(txHash, maxWaitMs=180000) {
   throw new Error('No contract address in receipt');
 }
 
-function resetFactory() { localStorage.removeItem(FACTORY_KEY); factoryAddress=null; location.reload(); }
+function resetFactory() { localStorage.removeItem(FACTORY_KEY); clearSession(); factoryAddress=null; location.reload(); }
 
 async function resetSwitchAndRedeploy() {
   const ok = await showConfirm({
@@ -1461,8 +1472,11 @@ function useExistingFactory() {
   document.getElementById('deploy-screen').classList.remove('show'); enterApp();
 }
 
-async function enterApp() {
-  await siweLogin();
+async function enterApp(skipLogin=false) {
+  // On a restored session we already have a valid JWT, so skip the wallet
+  // signature prompt. If the token turns out to be expired, apiFetch's 401
+  // handler re-signs automatically on the first real request.
+  if(!(skipLogin && jwt)) await siweLogin();
   document.getElementById('app-layout').classList.add('visible');
   // Read the wallet's ACTUAL chain (provider is pinned to a static network, so
   // provider.getNetwork() would always report 5003 and hide a real mismatch).
@@ -1491,6 +1505,8 @@ async function siweLogin() {
   const signature=await signer.signMessage(message);
   const authRes=await apiFetch('/auth/verify','POST',{message,signature});
   jwt=authRes.data?.token||authRes.token;
+  // Persist so a page refresh restores the session without re-signing.
+  if(jwt){ localStorage.setItem(JWT_KEY,jwt); localStorage.setItem(ADDR_KEY,userAddr); }
 }
 
 async function loadDashboard() {
@@ -2424,6 +2440,62 @@ function _resolveConfirm(result){
 document.getElementById('confirm-ok-btn').addEventListener('click',()=>_resolveConfirm(true));
 document.getElementById('confirm-cancel-btn').addEventListener('click',()=>_resolveConfirm(false));
 document.getElementById('confirm-modal').addEventListener('click',e=>{ if(e.target.id==='confirm-modal')_resolveConfirm(false); });
+
+// ══════════════════════════════════════
+//  SESSION RESTORE (stay logged in & on the same page after refresh)
+// ══════════════════════════════════════
+function restorePage(){
+  const saved=localStorage.getItem(PAGE_KEY);
+  if(saved && VALID_PAGES.includes(saved)) showPage(saved);
+}
+
+// Re-attach to an already-authorized wallet WITHOUT prompting. Uses eth_accounts
+// (which never opens a popup) to find the wallet still holding our saved address.
+async function restoreSession(){
+  const savedJwt=localStorage.getItem(JWT_KEY);
+  const savedAddr=localStorage.getItem(ADDR_KEY);
+  if(!savedJwt||!savedAddr) return false;
+
+  // EIP-6963 wallets announce asynchronously — nudge + give them a moment.
+  window.dispatchEvent(new Event('eip6963:requestProvider'));
+  await new Promise(r=>setTimeout(r,300));
+
+  const wallets=listInjectedWallets();
+  for(const w of wallets){
+    let accts=[];
+    try{ accts=await w.provider.request({method:'eth_accounts'}); }catch{}
+    if(accts && accts.map(a=>a.toLowerCase()).includes(savedAddr.toLowerCase())){
+      walletEip1193=w.provider;
+      provider=new ethers.BrowserProvider(walletEip1193,{chainId:CHAIN_ID,name:'mantle-sepolia'});
+      signer=await provider.getSigner(savedAddr);
+      userAddr=savedAddr;
+      jwt=savedJwt;
+      if(typeof walletEip1193.on==='function'){
+        walletEip1193.on('accountsChanged',()=>location.reload());
+        walletEip1193.on('chainChanged',()=>location.reload());
+      }
+      document.getElementById('conn-addr').textContent=userAddr.slice(0,6)+'...'+userAddr.slice(-4);
+      document.getElementById('page-connect').classList.remove('active');
+      if(!factoryAddress){
+        const bal=await testnetReadProvider.getBalance(userAddr).catch(()=>0n);
+        document.getElementById('deploy-addr-label').textContent=userAddr.slice(0,6)+'...'+userAddr.slice(-4);
+        document.getElementById('deploy-balance-label').textContent=parseFloat(ethers.formatEther(bal)).toFixed(4)+' MNT';
+        document.getElementById('deploy-screen').classList.add('show');
+        return true;
+      }
+      await enterApp(true);  // skip the signature prompt — reuse stored JWT
+      restorePage();
+      return true;
+    }
+  }
+  // No connected wallet currently exposes the saved address (wallet locked, not
+  // yet injected, or switched). Leave the stored session in place — the user can
+  // just reconnect; a different address overwrites it on sign-in, and an expired
+  // token is handled by apiFetch's 401 retry. Fall back to the connect screen.
+  return false;
+}
+
+restoreSession().catch(e=>console.warn('[DeathSwitch] session restore failed:',e));
 </script>
 </body>
 </html>
