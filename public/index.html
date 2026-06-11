@@ -1062,13 +1062,17 @@ function buildEkgSvg(state){
   for(var y=0;y<=H;y+=H/3)grid+='<line class="ecg-grid" x1="0" y1="'+y+'" x2="'+TW+'" y2="'+y+'"/>';
   return '<svg width="'+TW+'" height="'+H+'" viewBox="0 0 '+TW+' '+H+'" xmlns="http://www.w3.org/2000/svg" class="ecg-svg">'+grid+'<polyline class="ecg-poly" points="'+pts+'"/></svg>';
 }
+const ECG_SPEED = { ok: 200/1, warn: 180/0.65, danger: 160/0.4 }; // px/sec, matches original per-state pace
 function renderEkg(state){
   const track=document.getElementById('ecgTrack');
   if(!track) return;
-  const conf=EKG_CYCLES[state==='flatline'?'ok':state]||EKG_CYCLES.ok;
-  const svg=buildEkgSvg(state==='flatline'?'ok':state);
+  const key=state==='flatline'?'ok':state;
+  const conf=EKG_CYCLES[key]||EKG_CYCLES.ok;
+  const svg=buildEkgSvg(key);
   track.innerHTML=svg+svg;
-  track.style.setProperty('--ecg-shift', (-conf.W)+'px');
+  const TW=20*conf.W;
+  track.style.setProperty('--ecg-shift', (-TW)+'px');
+  track.style.animationDuration=(TW/(ECG_SPEED[key]||ECG_SPEED.ok))+'s';
 }
 renderEkg('ok');
 

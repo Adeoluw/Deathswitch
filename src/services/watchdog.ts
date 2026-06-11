@@ -217,12 +217,25 @@ export async function runWatchdog(): Promise<void> {
               `Watchdog: cannot trigger — beneficiary basisPoints sum to ${totalBasisPoints}/10000 (must equal 10000). ` +
               `Owner must update allocations so they total exactly 100%.`
             );
-            await sendAdminAlert(
-              "DeathSwitch: trigger blocked — allocation incomplete",
-              `Switch ${sw.id} (${sw.contractAddress}) cannot be triggered.\n` +
-              `Beneficiary basis points sum to ${totalBasisPoints}/10000 (need exactly 10000).\n` +
-              `The owner must update allocations so they total exactly 100%.`
-            ).catch(() => {});
+            // Only send this admin alert once per day, not on every watchdog tick
+            const lastAllocAlert = sw.notificationLogs
+              .filter((l) => l.stage === 5 && l.success)
+              .sort((a, b) => b.sentAt.getTime() - a.sentAt.getTime())[0];
+            if (!lastAllocAlert || Date.now() - lastAllocAlert.sentAt.getTime() >= ONE_DAY_MS) {
+              let alertSuccess = false;
+              try {
+                await sendAdminAlert(
+                  "DeathSwitch: trigger blocked — allocation incomplete",
+                  `Switch ${sw.id} (${sw.contractAddress}) cannot be triggered.\n` +
+                  `Beneficiary basis points sum to ${totalBasisPoints}/10000 (need exactly 10000).\n` +
+                  `The owner must update allocations so they total exactly 100%.`
+                );
+                alertSuccess = true;
+              } catch { /* logged inside sendAdminAlert */ }
+              await prisma.notificationLog.create({
+                data: { switchId: sw.id, stage: 5, channel: "EMAIL", success: alertSuccess },
+              });
+            }
             // Skip trigger attempt — it would just waste gas and revert
           } else {
             let success = false;
