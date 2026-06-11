@@ -33,7 +33,7 @@ const ERC20_ABI = [
 // primary (config.MANTLE_TESTNET_RPC_URL) is down or rate-limited.
 const TESTNET_FALLBACK_RPC_URLS = [
   "https://mantle-sepolia.drpc.org",
-  "https://endpoints.omniatech.io/v1/mantle/sepolia/public",
+  "https://5003.rpc.thirdweb.com",
 ];
 
 let _provider: ethers.FallbackProvider | null = null;
