@@ -30,11 +30,9 @@ const ERC20_ABI = [
 ];
 
 export function getProvider(): ethers.JsonRpcProvider {
-  const url =
-    config.NODE_ENV === "production"
-      ? config.MANTLE_RPC_URL
-      : config.MANTLE_TESTNET_RPC_URL;
-  return new ethers.JsonRpcProvider(url);
+  // The app and its contracts currently only run on Mantle Sepolia testnet,
+  // regardless of NODE_ENV — using mainnet here would always show 0 balances.
+  return new ethers.JsonRpcProvider(config.MANTLE_TESTNET_RPC_URL);
 }
 
 export function getBackendWallet(): ethers.Wallet {
