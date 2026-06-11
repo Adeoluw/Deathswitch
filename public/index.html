@@ -1840,6 +1840,15 @@ async function removeBeneficiary(id,walletAddr) {
 // ══════════════════════════════════════
 let _depositAssets = [];
 
+// Format a USD value, showing extra precision for tiny (e.g. testnet) amounts
+// so they don't all collapse to "$0.00".
+function formatUsd(v) {
+  v = v||0;
+  if (v === 0) return '0.00';
+  if (v < 0.01) return v.toFixed(6);
+  return v.toFixed(2);
+}
+
 async function loadAssets() {
   const res=await apiFetch('/assets','GET');
   const icons={MNT:'MNT',ETH:'ETH',USDC:'USD',USDT:'USD',BTC:'BTC',WBTC:'BTC'};
@@ -1848,9 +1857,9 @@ async function loadAssets() {
     return;
   }
   const{assets,totalUsdValue}=res.data;
-  const totalStr='$'+(totalUsdValue||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
-  const totalUsd=document.getElementById('total-usd'); if(totalUsd) totalUsd.innerHTML=`<span class="cur">$</span>${(totalUsdValue||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
-  const totalUsd2=document.getElementById('total-usd-2'); if(totalUsd2) totalUsd2.innerHTML=`<span class="cur">$</span>${(totalUsdValue||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const totalStr='$'+formatUsd(totalUsdValue);
+  const totalUsd=document.getElementById('total-usd'); if(totalUsd) totalUsd.innerHTML=`<span class="cur">$</span>${formatUsd(totalUsdValue)}`;
+  const totalUsd2=document.getElementById('total-usd-2'); if(totalUsd2) totalUsd2.innerHTML=`<span class="cur">$</span>${formatUsd(totalUsdValue)}`;
 
   const holdingsCount=document.getElementById('holdings-count'); if(holdingsCount) holdingsCount.textContent=`${(assets||[]).length} asset${(assets||[]).length===1?'':'s'}`;
   const dashAssetCount=document.getElementById('dash-asset-count'); if(dashAssetCount) dashAssetCount.textContent=`${(assets||[]).length} token${(assets||[]).length===1?'':'s'}`;
@@ -1861,7 +1870,7 @@ async function loadAssets() {
     ? assets.map(a=>`<div class="holding-item">
         <div class="h-ico">${icons[a.symbol]||a.symbol.slice(0,3)}</div>
         <div class="h-info"><div class="h-sym">${a.symbol}</div><div class="h-name">${a.balance}</div></div>
-        <div class="h-amt"><div class="h-qty">${a.balance}</div><div class="h-usd">$${(a.usdValue||0).toFixed(2)}</div></div>
+        <div class="h-amt"><div class="h-qty">${a.balance}</div><div class="h-usd">$${formatUsd(a.usdValue)}</div></div>
       </div><div class="h-bar"><div class="h-fill" style="width:${Math.round(((a.usdValue||0)/maxVal)*100)}%"></div></div>`).join('')
     : '<div class="empty">No assets in switch contract</div>';
   document.getElementById('asset-list').innerHTML=holdingsHtml;
@@ -1872,7 +1881,7 @@ async function loadAssets() {
       ? assets.map(a=>`<div class="asset-item">
           <div class="a-ico">${icons[a.symbol]||a.symbol.slice(0,3)}</div>
           <div class="a-info"><div class="a-sym">${a.symbol}</div><div class="a-name">${a.contractAddress?'ERC-20':'Native'}</div></div>
-          <div class="a-amt"><div class="a-qty">${a.balance}</div><div class="a-usd">$${(a.usdValue||0).toFixed(2)}</div></div>
+          <div class="a-amt"><div class="a-qty">${a.balance}</div><div class="a-usd">$${formatUsd(a.usdValue)}</div></div>
         </div>`).join('')
       : '<div class="empty">No assets yet</div>';
   }
