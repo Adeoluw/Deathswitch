@@ -8,12 +8,18 @@ const emailEnabled = !!(config.EMAIL_USER && config.EMAIL_APP_PASSWORD);
 
 const transporter = emailEnabled
   ? nodemailer.createTransport({
-      service: "gmail",
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true,
       auth: {
         user: config.EMAIL_USER!,
         pass: config.EMAIL_APP_PASSWORD!,
       },
-    })
+      // Render's containers lack outbound IPv6 connectivity, but Gmail's SMTP
+      // hostname resolves to an AAAA (IPv6) record — forcing IPv4 avoids
+      // ENETUNREACH/connection-timeout errors when sending.
+      family: 4,
+    } as nodemailer.TransportOptions)
   : null;
 
 export function isEmailEnabled(): boolean {
