@@ -41,6 +41,32 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
       logger.info({ switchId: sw.id }, "GET /switch: synced triggered state from on-chain");
     }
 
+    // Auto-sync: if on-chain lastCheckIn is newer than what's in the DB (e.g. the
+    // user checked in but the DB's nextCheckInDue/lastCheckIn weren't updated,
+    // or escalation already bumped escalationStage based on a stale deadline),
+    // realign DB state from on-chain so the UI doesn't show "overdue" incorrectly.
+    if (onChainStatus) {
+      const onChainLastCheckInMs = onChainStatus.lastCheckIn * 1000;
+      const dbLastCheckInMs = sw.lastCheckIn?.getTime() ?? 0;
+      if (onChainLastCheckInMs > dbLastCheckInMs) {
+        const newNextCheckInDue = new Date(onChainLastCheckInMs + sw.checkInIntervalSecs * 1000);
+        await prisma.switch.update({
+          where: { id: sw.id },
+          data: {
+            lastCheckIn: new Date(onChainLastCheckInMs),
+            nextCheckInDue: newNextCheckInDue,
+            escalationStage: 0,
+            ...(sw.status === "GRACE_PERIOD" ? { status: "ACTIVE" as const } : {}),
+          },
+        });
+        sw.lastCheckIn = new Date(onChainLastCheckInMs);
+        sw.nextCheckInDue = newNextCheckInDue;
+        sw.escalationStage = 0;
+        if (sw.status === "GRACE_PERIOD") sw.status = "ACTIVE";
+        logger.info({ switchId: sw.id }, "GET /switch: synced check-in state from on-chain");
+      }
+    }
+
     const lastCheckIn = onChainStatus
       ? new Date(onChainStatus.lastCheckIn * 1000).toISOString()
       : sw.lastCheckIn?.toISOString() ?? new Date().toISOString();

@@ -60,6 +60,29 @@ export async function runWatchdog(): Promise<void> {
 
   for (const sw of overdueSwitches) {
     try {
+      // If the on-chain lastCheckIn is newer than our DB record (user checked
+      // in but DB wasn't updated), realign and skip — it's no longer overdue.
+      try {
+        const onChain = await getSwitchStatusOnChain(sw.contractAddress);
+        const onChainLastCheckInMs = onChain.lastCheckIn * 1000;
+        if (onChainLastCheckInMs > (sw.lastCheckIn?.getTime() ?? 0)) {
+          const newNextCheckInDue = new Date(onChainLastCheckInMs + sw.checkInIntervalSecs * 1000);
+          await prisma.switch.update({
+            where: { id: sw.id },
+            data: {
+              lastCheckIn: new Date(onChainLastCheckInMs),
+              nextCheckInDue: newNextCheckInDue,
+              escalationStage: 0,
+              status: "ACTIVE",
+            },
+          });
+          logger.info({ switchId: sw.id }, "Watchdog: realigned from stale check-in state, skipping this tick");
+          continue;
+        }
+      } catch (err) {
+        logger.warn({ err, switchId: sw.id }, "Watchdog: could not pre-check on-chain lastCheckIn");
+      }
+
       const elapsed = now.getTime() - (sw.nextCheckInDue?.getTime() ?? 0);
 
       // Stage thresholds scale with this switch's own grace period instead of
