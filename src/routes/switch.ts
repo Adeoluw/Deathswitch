@@ -65,6 +65,8 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
         lastCheckIn,
         nextCheckInDue,
         gracePeriodDue,
+        notificationEmail: sw.notificationEmail,
+        notificationPhone: sw.notificationPhone,
         escalationStage: sw.escalationStage,
         checkInIntervalSecs: sw.checkInIntervalSecs,
         gracePeriodSecs: sw.gracePeriodSecs,

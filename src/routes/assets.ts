@@ -26,22 +26,47 @@ const KNOWN_TOKENS: Record<string, { symbol: string; decimals: number; geckoId: 
   },
 };
 
+// Fallback prices used if CoinGecko is unreachable/rate-limited, so the UI
+// never just silently shows $0.00 for everything.
+const FALLBACK_PRICES: Record<string, number> = {
+  mantle: 0.5,
+  "usd-coin": 1,
+  "wrapped-bitcoin": 60000,
+};
+
+let priceCache: { prices: Record<string, number>; expiresAt: number } | null = null;
+
 async function fetchUsdPrices(geckoIds: string[]): Promise<Record<string, number>> {
   if (geckoIds.length === 0) return {};
+  if (priceCache && priceCache.expiresAt > Date.now()) {
+    return priceCache.prices;
+  }
   const ids = geckoIds.join(",");
   try {
     const res = await fetch(
-      `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`
+      `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`,
+      { headers: { Accept: "application/json", "User-Agent": "deathswitch-app" } }
     );
+    if (!res.ok) {
+      throw new Error(`CoinGecko returned ${res.status}`);
+    }
     const data = (await res.json()) as Record<string, { usd: number }>;
     const prices: Record<string, number> = {};
     for (const [id, val] of Object.entries(data)) {
       prices[id] = val.usd;
     }
+    for (const id of geckoIds) {
+      if (!(id in prices) && id in FALLBACK_PRICES) prices[id] = FALLBACK_PRICES[id];
+    }
+    priceCache = { prices, expiresAt: Date.now() + 5 * 60 * 1000 };
     return prices;
   } catch (err) {
-    logger.warn({ err }, "CoinGecko price fetch failed");
-    return {};
+    logger.warn({ err }, "CoinGecko price fetch failed, using fallback prices");
+    const prices: Record<string, number> = {};
+    for (const id of geckoIds) {
+      if (id in FALLBACK_PRICES) prices[id] = FALLBACK_PRICES[id];
+    }
+    return prices;
   }
 }
 
