@@ -1288,17 +1288,23 @@ async function connectWallet() {
   }
   walletEip1193 = chosen;
   try {
-    provider = new ethers.BrowserProvider(walletEip1193);
-    await provider.send('eth_requestAccounts', []);
+    // Do the account + chain handshake with raw EIP-1193 calls rather than
+    // letting ethers auto-detect the network. Some wallets (notably mobile
+    // in-app browsers) return a network response that trips an ethers v6 bug:
+    // "(await detectNetwork).clone is not a function". Reading eth_chainId
+    // ourselves and pinning a static network below sidesteps detection entirely.
+    const accounts = await walletEip1193.request({ method: 'eth_requestAccounts' });
+    if (!accounts || !accounts.length) throw new Error('No accounts returned by wallet');
+    let chainId = parseInt(await walletEip1193.request({ method: 'eth_chainId' }), 16);
+    if (chainId !== CHAIN_ID) {
+      await switchNetwork();
+      try { chainId = parseInt(await walletEip1193.request({ method: 'eth_chainId' }), 16); } catch {}
+    }
+    // Pin the network (static) so ethers never runs its auto-detection, which is
+    // what throws the ".clone is not a function" error on some wallets.
+    provider = new ethers.BrowserProvider(walletEip1193, { chainId: CHAIN_ID, name: 'mantle-sepolia' });
     signer   = await provider.getSigner();
     userAddr = await signer.getAddress();
-    const network = await provider.getNetwork();
-    if (Number(network.chainId) !== CHAIN_ID) {
-      await switchNetwork();
-      provider = new ethers.BrowserProvider(walletEip1193);
-      signer   = await provider.getSigner();
-      userAddr = await signer.getAddress();
-    }
     document.getElementById('conn-addr').textContent = userAddr.slice(0,6)+'...'+userAddr.slice(-4);
     document.getElementById('page-connect').classList.remove('active');
     if (!factoryAddress) {
@@ -1458,10 +1464,13 @@ function useExistingFactory() {
 async function enterApp() {
   await siweLogin();
   document.getElementById('app-layout').classList.add('visible');
-  const network=await provider.getNetwork();
+  // Read the wallet's ACTUAL chain (provider is pinned to a static network, so
+  // provider.getNetwork() would always report 5003 and hide a real mismatch).
+  let actualChainId = CHAIN_ID;
+  try { actualChainId = parseInt(await (walletEip1193||window.ethereum).request({ method:'eth_chainId' }), 16); } catch {}
   const netChip=document.getElementById('conn-net-chip');
-  document.getElementById('conn-net').textContent=Number(network.chainId)===CHAIN_ID?'Mantle Sepolia':'Wrong Network';
-  if(Number(network.chainId)!==CHAIN_ID){
+  document.getElementById('conn-net').textContent=actualChainId===CHAIN_ID?'Mantle Sepolia':'Wrong Network';
+  if(actualChainId!==CHAIN_ID){
     document.getElementById('net-warn').classList.add('show');
     if(netChip) netChip.classList.add('warn');
   } else if(netChip) netChip.classList.remove('warn');
