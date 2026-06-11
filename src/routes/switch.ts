@@ -87,22 +87,6 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
   }
 });
 
-// TEMPORARY DEBUG ENDPOINT — remove after diagnosing production deploy issue.
-// Returns the raw Switch+User row for a wallet address (case-insensitive), no auth.
-router.get("/debug/:walletAddress", async (req: Request, res: Response) => {
-  try {
-    const wallet = String(req.params.walletAddress).toLowerCase();
-    const user = await prisma.user.findUnique({
-      where: { walletAddress: wallet },
-      include: { switch: { include: { beneficiaries: true } } },
-    });
-    res.json({ success: true, data: user });
-  } catch (err) {
-    logger.error({ err }, "GET /switch/debug error");
-    res.status(500).json({ success: false, error: "Internal server error" });
-  }
-});
-
 // Frontend deploys the contract itself (user signs with their wallet),
 // then calls this endpoint to register the deployed address in the DB.
 router.post("/create", authenticate, async (req: Request, res: Response) => {
