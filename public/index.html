@@ -857,7 +857,8 @@ input.plain:focus{border-color:rgba(0,255,234,.4);box-shadow:0 0 0 3px rgba(0,25
                 <button onclick="setMaxDeposit()" style="position:absolute;right:12px;top:50%;transform:translateY(-50%);font-family:var(--mono);font-size:11px;font-weight:700;color:var(--c);letter-spacing:.06em">MAX</button>
               </div>
             </div>
-            <div style="font-family:var(--mono);font-size:11px;color:var(--td);margin-bottom:18px">Wallet balance: <span id="deposit-wallet-balance">—</span></div>
+            <div style="font-family:var(--mono);font-size:11px;color:var(--td);margin-bottom:6px">Wallet balance (Testnet): <span id="deposit-wallet-balance">—</span></div>
+            <div id="deposit-mainnet-row" style="font-family:var(--mono);font-size:11px;color:var(--td);margin-bottom:18px;display:none">Wallet balance (Mainnet): <span id="deposit-wallet-balance-mainnet">—</span> <span style="color:var(--g)">— deposits use Testnet only</span></div>
             <button class="btn btn-c btn-full" style="padding:13px" onclick="submitDeposit()" id="deposit-submit-btn">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
               Deposit
@@ -1124,6 +1125,15 @@ const CHAIN_HEX   = '0x138B';
 const EXPLORER    = 'https://explorer.sepolia.mantle.xyz';
 const FACTORY_KEY = 'ds_factory_v1';
 
+// DeathSwitch contracts live on Mantle Sepolia (testnet) — that's the only
+// network deposits actually go to. We also show the wallet's Mantle Mainnet
+// balance read-only, so users on the wrong network understand why their
+// "balance" looks empty (they're looking at the wrong chain).
+const TESTNET_RPC_URL = 'https://rpc.sepolia.mantle.xyz';
+const MAINNET_RPC_URL = 'https://rpc.mantle.xyz';
+const testnetReadProvider = new ethers.JsonRpcProvider(TESTNET_RPC_URL);
+const mainnetReadProvider = new ethers.JsonRpcProvider(MAINNET_RPC_URL);
+
 const MANTLE_CHAIN_PARAMS = {
   chainId: CHAIN_HEX,
   chainName: 'Mantle Sepolia Testnet',
@@ -1206,7 +1216,11 @@ async function deployFactory() {
   btn.innerHTML = '<span class="spinner"></span> Waiting for wallet confirmation...';
   try {
     const factory = new ethers.ContractFactory(FACTORY_ABI, FACTORY_BYTECODE, signer);
-    const contract = await factory.deploy();
+    // Skip eth_estimateGas — some Mantle RPC nodes return a malformed/multi-error
+    // response for it that ethers can't parse ("could not coalesce error"),
+    // which aborts the deploy before the wallet even prompts. A fixed gas limit
+    // sidesteps the estimate call entirely.
+    const contract = await factory.deploy({ gasLimit: 5_000_000n });
     const txHash = contract.deploymentTransaction().hash;
     btn.innerHTML = '<span class="spinner"></span> Confirming... ('+txHash.slice(0,10)+'...)';
     factoryAddress = await pollForContractAddress(txHash);
@@ -1215,7 +1229,12 @@ async function deployFactory() {
     document.getElementById('deploy-screen').classList.remove('show');
     await enterApp();
   } catch(e) {
-    toast('Deploy failed: '+(e.shortMessage||e.message), 'error');
+    const msg=e.shortMessage||e.message||String(e);
+    if(msg.includes('could not coalesce error')||msg.includes('coalesce')) {
+      toast('Deploy failed: network RPC error. Please check your wallet for a pending request, or try again in a moment.','error');
+    } else {
+      toast('Deploy failed: '+msg, 'error');
+    }
     btn.disabled = false;
     btn.innerHTML = '🚀 Deploy Factory Contract';
   }
@@ -1592,7 +1611,7 @@ async function createSwitch() {
   toast('Check your wallet for confirmation...','info');
   try {
     const factory=new ethers.Contract(factoryAddress,FACTORY_ABI,signer);
-    const tx=await factory.createSwitch(intervalSecs,graceSecs);
+    const tx=await factory.createSwitch(intervalSecs,graceSecs,{gasLimit:5_000_000n});
     toast('Transaction sent, confirming... ('+tx.hash.slice(0,10)+'...)','success');
     let receipt=null; const start=Date.now();
     while(!receipt&&Date.now()-start<120000){
@@ -1933,13 +1952,25 @@ async function onDepositAssetChange() {
   const asset=_depositAssets[idx];
   if(!asset||!provider||!userAddr) return;
   const balEl=document.getElementById('deposit-wallet-balance');
+  const mainnetRow=document.getElementById('deposit-mainnet-row');
+  const mainnetBalEl=document.getElementById('deposit-wallet-balance-mainnet');
   balEl.textContent='Loading...';
+  mainnetRow.style.display='none';
   try {
     if(!asset.contractAddress) {
-      const bal=await provider.getBalance(userAddr);
+      // Always read native MNT balance from a dedicated Mantle Sepolia RPC,
+      // regardless of which network the wallet is currently connected to —
+      // otherwise users on Mantle Mainnet see "0" and think their deposit
+      // never went through.
+      const bal=await testnetReadProvider.getBalance(userAddr);
       balEl.textContent=parseFloat(ethers.formatEther(bal)).toFixed(5)+' '+asset.symbol;
+      try {
+        const mainnetBal=await mainnetReadProvider.getBalance(userAddr);
+        mainnetBalEl.textContent=parseFloat(ethers.formatEther(mainnetBal)).toFixed(5)+' MNT';
+        mainnetRow.style.display='block';
+      } catch { /* mainnet RPC optional */ }
     } else {
-      const token=new ethers.Contract(asset.contractAddress,ERC20_ABI_FE,provider);
+      const token=new ethers.Contract(asset.contractAddress,ERC20_ABI_FE,testnetReadProvider);
       const bal=await token.balanceOf(userAddr);
       const dec=asset.decimals ?? await token.decimals();
       balEl.textContent=parseFloat(ethers.formatUnits(bal,dec)).toFixed(5)+' '+asset.symbol;
@@ -1955,7 +1986,7 @@ async function setMaxDeposit() {
   if(!asset||!provider||!userAddr) return;
   try {
     if(!asset.contractAddress) {
-      const bal=await provider.getBalance(userAddr);
+      const bal=await testnetReadProvider.getBalance(userAddr);
       const gasBuffer=ethers.parseEther('0.001');
       const max=bal>gasBuffer?bal-gasBuffer:0n;
       document.getElementById('deposit-amount').value=ethers.formatEther(max);
