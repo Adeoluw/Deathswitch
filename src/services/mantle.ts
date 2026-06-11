@@ -29,10 +29,32 @@ const ERC20_ABI = [
   "function symbol() external view returns (string)",
 ];
 
-export function getProvider(): ethers.JsonRpcProvider {
+// Public fallback RPC endpoints for Mantle Sepolia testnet, used if the
+// primary (config.MANTLE_TESTNET_RPC_URL) is down or rate-limited.
+const TESTNET_FALLBACK_RPC_URLS = [
+  "https://mantle-sepolia.drpc.org",
+  "https://endpoints.omniatech.io/v1/mantle/sepolia/public",
+];
+
+let _provider: ethers.FallbackProvider | null = null;
+
+export function getProvider(): ethers.FallbackProvider {
   // The app and its contracts currently only run on Mantle Sepolia testnet,
   // regardless of NODE_ENV — using mainnet here would always show 0 balances.
-  return new ethers.JsonRpcProvider(config.MANTLE_TESTNET_RPC_URL);
+  if (_provider) return _provider;
+
+  const urls = [config.MANTLE_TESTNET_RPC_URL, ...TESTNET_FALLBACK_RPC_URLS];
+  const configs = urls.map((url, i) => ({
+    provider: new ethers.JsonRpcProvider(url, undefined, { staticNetwork: true }),
+    priority: i,
+    stallTimeout: 2500,
+    weight: 1,
+  }));
+  // quorum: 1 — accept the first healthy provider's response rather than
+  // requiring agreement across all endpoints (these are just redundant
+  // public RPCs, not independent trust sources).
+  _provider = new ethers.FallbackProvider(configs, undefined, { quorum: 1 });
+  return _provider;
 }
 
 export function getBackendWallet(): ethers.Wallet {

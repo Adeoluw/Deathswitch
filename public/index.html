@@ -1136,10 +1136,27 @@ const FACTORY_KEY = 'ds_factory_v1';
 // network deposits actually go to. We also show the wallet's Mantle Mainnet
 // balance read-only, so users on the wrong network understand why their
 // "balance" looks empty (they're looking at the wrong chain).
-const TESTNET_RPC_URL = 'https://rpc.sepolia.mantle.xyz';
-const MAINNET_RPC_URL = 'https://rpc.mantle.xyz';
-const testnetReadProvider = new ethers.JsonRpcProvider(TESTNET_RPC_URL);
-const mainnetReadProvider = new ethers.JsonRpcProvider(MAINNET_RPC_URL);
+const TESTNET_RPC_URLS = [
+  'https://rpc.sepolia.mantle.xyz',
+  'https://mantle-sepolia.drpc.org',
+  'https://endpoints.omniatech.io/v1/mantle/sepolia/public',
+];
+const MAINNET_RPC_URLS = [
+  'https://rpc.mantle.xyz',
+  'https://mantle-rpc.publicnode.com',
+  'https://mantle.drpc.org',
+];
+function makeFallbackProvider(urls) {
+  const configs = urls.map((url, i) => ({
+    provider: new ethers.JsonRpcProvider(url, undefined, { staticNetwork: true }),
+    priority: i,
+    stallTimeout: 2500,
+    weight: 1,
+  }));
+  return new ethers.FallbackProvider(configs, undefined, { quorum: 1 });
+}
+const testnetReadProvider = makeFallbackProvider(TESTNET_RPC_URLS);
+const mainnetReadProvider = makeFallbackProvider(MAINNET_RPC_URLS);
 
 const MANTLE_CHAIN_PARAMS = {
   chainId: CHAIN_HEX,
