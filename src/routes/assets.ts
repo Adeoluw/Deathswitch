@@ -19,11 +19,6 @@ const KNOWN_TOKENS: Record<string, { symbol: string; decimals: number; geckoId: 
     decimals: 8,
     geckoId: "wrapped-bitcoin",
   },
-  "0x78c1b0C915c4FAA5FffA6CAbf0219DA63d7f4cb9": {
-    symbol: "MNT token",
-    decimals: 18,
-    geckoId: "mantle",
-  },
 };
 
 // Fallback prices used if CoinGecko is unreachable/rate-limited, so the UI
