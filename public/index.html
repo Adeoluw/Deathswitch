@@ -1200,19 +1200,102 @@ let factoryAddress = localStorage.getItem(FACTORY_KEY) || null;
 console.log('[DeathSwitch] Factory address from storage:', factoryAddress);
 
 // ══════════════════════════════════════
+//  WALLET DISCOVERY (wallet-agnostic, EIP-6963)
+// ══════════════════════════════════════
+// Works with ANY injected EIP-1193 wallet — MetaMask, Rabby, Coinbase Wallet,
+// Trust, OKX, Brave, Frame, etc. — without the app hard-coding or "picking" a
+// brand. Modern wallets announce themselves via EIP-6963; we also fall back to
+// the legacy window.ethereum (and its .providers array) so older wallets work
+// too. The actual selected wallet is stored in `walletEip1193` and everything
+// (BrowserProvider, network switch, event listeners) talks to THAT, not the
+// ambiguous global window.ethereum (which breaks when several wallets coexist).
+const _eip6963Wallets = []; // { info:{uuid,name,icon,rdns}, provider }
+let walletEip1193 = null;   // the EIP-1193 provider the user actually connected with
+
+function _registerEip6963(detail) {
+  if (!detail || !detail.provider || !detail.info) return;
+  if (_eip6963Wallets.some(w => w.info.uuid === detail.info.uuid)) return;
+  _eip6963Wallets.push(detail);
+}
+window.addEventListener('eip6963:announceProvider', (e) => _registerEip6963(e.detail));
+window.dispatchEvent(new Event('eip6963:requestProvider'));
+
+// Returns the de-duplicated list of every injected wallet we can find.
+function listInjectedWallets() {
+  const list = _eip6963Wallets.map(w => ({ name: w.info.name, icon: w.info.icon, provider: w.provider }));
+  const legacy = window.ethereum;
+  if (legacy) {
+    const legacyProviders = (Array.isArray(legacy.providers) && legacy.providers.length) ? legacy.providers : [legacy];
+    for (const p of legacyProviders) {
+      if (list.some(w => w.provider === p)) continue;
+      const name = p.isRabby ? 'Rabby'
+        : p.isMetaMask ? 'MetaMask'
+        : p.isCoinbaseWallet ? 'Coinbase Wallet'
+        : p.isTrust ? 'Trust Wallet'
+        : p.isOkxWallet ? 'OKX Wallet'
+        : p.isFrame ? 'Frame'
+        : 'Injected Wallet';
+      list.push({ name, icon: null, provider: p });
+    }
+  }
+  return list;
+}
+
+// Resolve to a single EIP-1193 provider. If exactly one wallet exists, use it.
+// If several, let the user pick (so we never silently choose the "wrong" one).
+async function chooseWallet() {
+  const wallets = listInjectedWallets();
+  if (wallets.length === 0) return null;
+  if (wallets.length === 1) return wallets[0].provider;
+  return await showWalletPicker(wallets);
+}
+
+function showWalletPicker(wallets) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)';
+    const card = document.createElement('div');
+    card.style.cssText = 'background:var(--bg2,#14161c);border:1px solid var(--b2,#2a2d36);border-radius:16px;padding:22px;width:min(360px,90vw);box-shadow:0 20px 60px rgba(0,0,0,.5)';
+    card.innerHTML = '<div style="font-size:16px;font-weight:700;margin-bottom:4px">Choose a wallet</div>'
+      + '<div style="font-size:12.5px;color:var(--td,#8a90a0);margin-bottom:16px">Multiple wallets detected. Pick the one to connect with.</div>';
+    wallets.forEach(w => {
+      const btn = document.createElement('button');
+      btn.style.cssText = 'display:flex;align-items:center;gap:12px;width:100%;padding:13px 14px;margin-bottom:9px;background:var(--bg3,#1b1e26);border:1px solid var(--b2,#2a2d36);border-radius:11px;cursor:pointer;color:var(--t,#fff);font-size:14px;font-weight:600;text-align:left';
+      btn.innerHTML = (w.icon ? `<img src="${w.icon}" alt="" style="width:26px;height:26px;border-radius:6px">` : '<span style="width:26px;height:26px;border-radius:6px;background:var(--c,#5b7fff);display:flex;align-items:center;justify-content:center;font-size:13px">👛</span>') + `<span>${w.name}</span>`;
+      btn.onclick = () => { document.body.removeChild(overlay); resolve(w.provider); };
+      card.appendChild(btn);
+    });
+    const cancel = document.createElement('button');
+    cancel.textContent = 'Cancel';
+    cancel.style.cssText = 'width:100%;padding:11px;margin-top:4px;background:transparent;border:none;color:var(--td,#8a90a0);cursor:pointer;font-size:13px';
+    cancel.onclick = () => { document.body.removeChild(overlay); resolve(null); };
+    card.appendChild(cancel);
+    overlay.appendChild(card);
+    overlay.onclick = (e) => { if (e.target === overlay) { document.body.removeChild(overlay); resolve(null); } };
+    document.body.appendChild(overlay);
+  });
+}
+
+// ══════════════════════════════════════
 //  CONNECT WALLET
 // ══════════════════════════════════════
 async function connectWallet() {
-  if (!window.ethereum) { toast('No wallet extension found. Please install Rabby or MetaMask.', 'error'); return; }
+  const chosen = await chooseWallet();
+  if (!chosen) {
+    if (listInjectedWallets().length === 0)
+      toast('No wallet detected. Install MetaMask, Rabby, Coinbase Wallet, or any EIP-1193 wallet.', 'error');
+    return;
+  }
+  walletEip1193 = chosen;
   try {
-    provider = new ethers.BrowserProvider(window.ethereum);
+    provider = new ethers.BrowserProvider(walletEip1193);
     await provider.send('eth_requestAccounts', []);
     signer   = await provider.getSigner();
     userAddr = await signer.getAddress();
     const network = await provider.getNetwork();
     if (Number(network.chainId) !== CHAIN_ID) {
       await switchNetwork();
-      provider = new ethers.BrowserProvider(window.ethereum);
+      provider = new ethers.BrowserProvider(walletEip1193);
       signer   = await provider.getSigner();
       userAddr = await signer.getAddress();
     }
@@ -1224,14 +1307,19 @@ async function connectWallet() {
       document.getElementById('deploy-balance-label').textContent = parseFloat(ethers.formatEther(bal)).toFixed(4)+' MNT';
       document.getElementById('deploy-screen').classList.add('show');
     } else { await enterApp(); }
-    window.ethereum.on('accountsChanged', () => location.reload());
-    window.ethereum.on('chainChanged',    () => location.reload());
+    // Not every wallet implements .on() — guard so a missing listener API
+    // never aborts an otherwise-successful connection.
+    if (typeof walletEip1193.on === 'function') {
+      walletEip1193.on('accountsChanged', () => location.reload());
+      walletEip1193.on('chainChanged',    () => location.reload());
+    }
   } catch(e) { toast('Connection failed: '+(e.shortMessage||e.message), 'error'); }
 }
 
 async function switchNetwork() {
-  try { await window.ethereum.request({ method:'wallet_switchEthereumChain', params:[{chainId:CHAIN_HEX}] }); }
-  catch(e) { if (e.code===4902) { await window.ethereum.request({ method:'wallet_addEthereumChain', params:[MANTLE_CHAIN_PARAMS] }); } else { throw e; } }
+  const w = walletEip1193 || window.ethereum;
+  try { await w.request({ method:'wallet_switchEthereumChain', params:[{chainId:CHAIN_HEX}] }); }
+  catch(e) { if (e.code===4902) { await w.request({ method:'wallet_addEthereumChain', params:[MANTLE_CHAIN_PARAMS] }); } else { throw e; } }
 }
 
 // Build transaction overrides (gasLimit + nonce + gasPrice) using OUR reliable
