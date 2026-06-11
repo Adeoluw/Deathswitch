@@ -28,6 +28,18 @@ export function isEmailEnabled(): boolean {
 
 const resendEnabled = !!(config.RESEND_API_KEY && config.RESEND_FROM_EMAIL);
 
+// Crude HTML -> plain text conversion. Sending a text alternative alongside
+// HTML significantly reduces spam-folder placement (HTML-only emails from
+// shared sending domains are a strong spam signal).
+function htmlToText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|h[1-6]|li)>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 async function sendViaResend(to: string, subject: string, html: string): Promise<void> {
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -40,6 +52,8 @@ async function sendViaResend(to: string, subject: string, html: string): Promise
       to: [to],
       subject,
       html,
+      text: htmlToText(html),
+      reply_to: config.ADMIN_EMAIL,
     }),
   });
   if (!res.ok) {
@@ -66,6 +80,7 @@ async function sendEmail(to: string, subject: string, html: string): Promise<voi
     to,
     subject,
     html,
+    text: htmlToText(html),
   });
 }
 
