@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  walletAddress String    @unique
+  nonce         String
+  createdAt     DateTime  @default(now())
+  switch        Switch?
+  sessions      Session[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Switch {
+  id                  String            @id @default(cuid())
+  userId              String            @unique
+  contractAddress     String            @unique
+  checkInIntervalSecs Int               @default(604800)
+  gracePeriodSecs     Int               @default(2592000)
+  lastCheckIn         DateTime?
+  nextCheckInDue      DateTime?
+  notificationEmail   String?
+  notificationPhone   String?
+  status              SwitchStatus      @default(ACTIVE)
+  escalationStage     Int               @default(0)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  user                User              @relation(fields: [userId], references: [id])
+  beneficiaries       Beneficiary[]
+  notificationLogs    NotificationLog[]
+}
+
+enum SwitchStatus {
+  ACTIVE
+  GRACE_PERIOD
+  TRIGGERED
+  PAUSED
+}
+
+model Beneficiary {
+  id            String   @id @default(cuid())
+  switchId      String
+  walletAddress String
+  label         String
+  basisPoints   Int
+  tokens        String[]
+  switch        Switch   @relation(fields: [switchId], references: [id])
+}
+
+model NotificationLog {
+  id       String              @id @default(cuid())
+  switchId String
+  stage    Int
+  channel  NotificationChannel
+  sentAt   DateTime            @default(now())
+  success  Boolean
+  error    String?
+  switch   Switch              @relation(fields: [switchId], references: [id])
+}
+
+enum NotificationChannel {
+  EMAIL
+  SMS
+  CALL
+}

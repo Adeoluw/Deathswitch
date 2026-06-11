@@ -1,0 +1,1 @@
+ALTER TYPE "SwitchStatus" ADD VALUE 'PENDING';
