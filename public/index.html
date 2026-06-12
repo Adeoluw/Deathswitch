@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DeathSwitch · Pulse</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.1/ethers.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.5/ethers.umd.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <style>
@@ -1169,6 +1169,16 @@ function makeFallbackProvider(urls) {
 const testnetReadProvider = makeFallbackProvider(TESTNET_RPC_URLS);
 const mainnetReadProvider = makeFallbackProvider(MAINNET_RPC_URLS);
 
+// A pinned (static) Network for the wallet provider. Passing this as the network
+// AND as the staticNetwork option means ethers NEVER runs its network auto-
+// detection — that detection is what throws "(await detectNetwork).clone is not
+// a function" on some wallets/in-app browsers. Every BrowserProvider in the app
+// is built through makeWalletProvider() so this is applied consistently.
+const MANTLE_NETWORK = new ethers.Network('mantle-sepolia', CHAIN_ID);
+function makeWalletProvider(eip1193) {
+  return new ethers.BrowserProvider(eip1193, MANTLE_NETWORK, { staticNetwork: MANTLE_NETWORK });
+}
+
 const MANTLE_CHAIN_PARAMS = {
   chainId: CHAIN_HEX,
   chainName: 'Mantle Sepolia Testnet',
@@ -1313,7 +1323,7 @@ async function connectWallet() {
     }
     // Pin the network (static) so ethers never runs its auto-detection, which is
     // what throws the ".clone is not a function" error on some wallets.
-    provider = new ethers.BrowserProvider(walletEip1193, { chainId: CHAIN_ID, name: 'mantle-sepolia' });
+    provider = makeWalletProvider(walletEip1193);
     signer   = await provider.getSigner();
     userAddr = await signer.getAddress();
     document.getElementById('conn-addr').textContent = userAddr.slice(0,6)+'...'+userAddr.slice(-4);
@@ -2132,10 +2142,22 @@ function setDepositNetwork(net) {
   onDepositAssetChange();
 }
 
+// Read a native-MNT balance reliably: try our multi-endpoint testnet RPC first,
+// then fall back to the wallet's own provider if that fails. Never silently
+// returns nothing — throws so the caller can show a retry hint.
+async function readTestnetBalance(addr){
+  try { return await testnetReadProvider.getBalance(addr); }
+  catch(e){
+    if(provider){ try { return await provider.getBalance(addr); } catch {} }
+    throw e;
+  }
+}
+
 async function onDepositAssetChange() {
   const idx=document.getElementById('deposit-asset-select').value;
   const asset=_depositAssets[idx];
-  if(!asset||!provider||!userAddr) return;
+  // Only userAddr is required — balances come from read-only RPCs, not the wallet.
+  if(!asset||!userAddr) return;
   const balEl=document.getElementById('deposit-wallet-balance');
   const mainnetBalEl=document.getElementById('deposit-wallet-balance-mainnet');
   balEl.textContent='Loading...';
@@ -2145,7 +2167,7 @@ async function onDepositAssetChange() {
       // regardless of which network the wallet is currently connected to —
       // otherwise users on Mantle Mainnet see "0" and think their deposit
       // never went through.
-      const bal=await testnetReadProvider.getBalance(userAddr);
+      const bal=await readTestnetBalance(userAddr);
       balEl.textContent=parseFloat(ethers.formatEther(bal)).toFixed(5)+' '+asset.symbol;
       if(_depositNetwork==='mainnet'){
         try {
@@ -2161,22 +2183,23 @@ async function onDepositAssetChange() {
       if(_depositNetwork==='mainnet') mainnetBalEl.textContent='— (token balances shown for Testnet only)';
     }
   } catch(e) {
-    balEl.textContent='—';
+    console.error('[DeathSwitch] balance read failed:',e);
+    balEl.innerHTML='<span style="color:var(--y)">network busy — </span><a href="#" onclick="onDepositAssetChange();return false" style="color:var(--c)">retry</a>';
   }
 }
 
 async function setMaxDeposit() {
   const idx=document.getElementById('deposit-asset-select').value;
   const asset=_depositAssets[idx];
-  if(!asset||!provider||!userAddr) return;
+  if(!asset||!userAddr) return;
   try {
     if(!asset.contractAddress) {
-      const bal=await testnetReadProvider.getBalance(userAddr);
+      const bal=await readTestnetBalance(userAddr);
       const gasBuffer=ethers.parseEther('0.001');
       const max=bal>gasBuffer?bal-gasBuffer:0n;
       document.getElementById('deposit-amount').value=ethers.formatEther(max);
     } else {
-      const token=new ethers.Contract(asset.contractAddress,ERC20_ABI_FE,provider);
+      const token=new ethers.Contract(asset.contractAddress,ERC20_ABI_FE,testnetReadProvider);
       const bal=await token.balanceOf(userAddr);
       const dec=asset.decimals ?? await token.decimals();
       document.getElementById('deposit-amount').value=ethers.formatUnits(bal,dec);
@@ -2466,7 +2489,7 @@ async function restoreSession(){
     try{ accts=await w.provider.request({method:'eth_accounts'}); }catch{}
     if(accts && accts.map(a=>a.toLowerCase()).includes(savedAddr.toLowerCase())){
       walletEip1193=w.provider;
-      provider=new ethers.BrowserProvider(walletEip1193,{chainId:CHAIN_ID,name:'mantle-sepolia'});
+      provider=makeWalletProvider(walletEip1193);
       signer=await provider.getSigner(savedAddr);
       userAddr=savedAddr;
       jwt=savedJwt;
